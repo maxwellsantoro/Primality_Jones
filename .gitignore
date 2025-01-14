@@ -27,3 +27,19 @@ test_candidates/
 # Environment files
 .env
 .env.local
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python package builds
+*.so
+*.dylib
+*.dll
+*.whl
+dist/
+build/
+*.egg-info/
