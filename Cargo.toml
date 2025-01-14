@@ -1,0 +1,25 @@
+[package]
+name = "primality_jones"
+version = "0.1.0"
+edition = "2021"
+authors = ["Maxwell Santoro <maxwellsantoro@hey.com>"]
+description = "A fast Mersenne number primality checking tool with multiple levels of verification"
+license = "MIT"
+repository = "https://github.com/maxwellsantoro/primality_jones"
+keywords = ["mathematics", "prime", "mersenne", "number-theory", "cryptography"]
+categories = ["mathematics", "algorithms", "cryptography"]
+
+[lib]
+name = "primality_jones"
+path = "src/lib.rs"
+
+[[bin]]
+name = "primality_jones"
+path = "src/main.rs"
+
+[dependencies]
+num-bigint = { version = "0.4", features = ["rand"] }
+num-traits = "0.2"
+rand = "0.8"
+indicatif = "0.17"
+chrono = "0.4"
