@@ -1,6 +1,7 @@
 use primality_jones::*;
 use std::time::{Duration, Instant};
 use indicatif::{ProgressBar, ProgressStyle};
+use num_traits::{One, Zero};
 
 /// Comprehensive verification test suite that combines all three levels
 pub struct ComprehensiveVerification {
@@ -34,7 +35,7 @@ impl ComprehensiveVerification {
 
     pub fn run_all_verifications(&mut self) -> VerificationReport {
         println!("🔬 Starting Comprehensive Verification of primality_jones");
-        println!("=" * 60);
+        println!("{}", "=".repeat(60));
         
         // Level 1: Empirical Verification
         self.run_empirical_verification();
@@ -50,7 +51,7 @@ impl ComprehensiveVerification {
 
     fn run_empirical_verification(&mut self) {
         println!("\n📊 Level 1: Empirical Verification");
-        println!("-" * 40);
+        println!("{}", "-".repeat(40));
         
         // Test 1: Known Mersenne primes
         self.run_test("Known Mersenne Primes", VerificationLevel::Empirical, || {
@@ -103,7 +104,7 @@ impl ComprehensiveVerification {
             // Test mod_mp bounds
             for p in 3..20 {
                 let mp = (num_bigint::BigUint::one() << p) - num_bigint::BigUint::one();
-                for k in 0..1000 {
+                for k in 0..1000u32 {
                     let k_big = num_bigint::BigUint::from(k);
                     let result = mod_mp(&k_big, p);
                     if result >= mp {
@@ -161,7 +162,7 @@ impl ComprehensiveVerification {
 
     fn run_algorithmic_verification(&mut self) {
         println!("\n🔍 Level 2: Algorithmic Verification");
-        println!("-" * 40);
+        println!("{}", "-".repeat(40));
         
         // Test 1: Lucas-Lehmer algorithm correctness
         self.run_test("Lucas-Lehmer Algorithm Audit", VerificationLevel::Algorithmic, || {
@@ -240,7 +241,7 @@ impl ComprehensiveVerification {
 
     fn run_formal_verification(&mut self) {
         println!("\n🏆 Level 3: Formal Verification");
-        println!("-" * 40);
+        println!("{}", "-".repeat(40));
         
         // Placeholder for formal verification
         self.run_test("Formal Verification (Lean/Coq)", VerificationLevel::Formal, || {
@@ -316,9 +317,9 @@ impl VerificationReport {
     }
 
     pub fn print_summary(&self) {
-        println!("\n" + "=" * 60);
+        println!("\n{}", "=".repeat(60));
         println!("📋 COMPREHENSIVE VERIFICATION SUMMARY");
-        println!("=" * 60);
+        println!("{}", "=".repeat(60));
         
         println!("Total Tests: {} ({} passed, {} failed)", 
             self.total_tests, self.passed_tests, self.failed_tests);
@@ -335,7 +336,7 @@ impl VerificationReport {
                 VerificationLevel::Formal => "Formal",
             };
             let success_rate = if *total > 0 { 
-                (passed as f64 / total as f64) * 100.0 
+                (*passed as f64 / *total as f64) * 100.0 
             } else { 
                 0.0 
             };
@@ -354,7 +355,7 @@ impl VerificationReport {
             println!("✅ All tests passed! primality_jones is mathematically correct.");
         }
         
-        println!("\n" + "=" * 60);
+        println!("\n{}", "=".repeat(60));
     }
 }
 

@@ -171,14 +171,14 @@ fn verify_mathematical_properties() {
         let mp = (num_bigint::BigUint::one() << p) - num_bigint::BigUint::one();
         
         // Test that mod_mp result is always less than M_p
-        for k in 0..100 {
+        for k in 0..100u32 {
             let k_big = num_bigint::BigUint::from(k);
             let result = mod_mp(&k_big, p);
             assert!(result < mp, "mod_mp({}, {}) = {} >= 2^{} - 1", k, p, result, p);
         }
         
         // Test that mod_mp is idempotent
-        for k in 0..100 {
+        for k in 0..100u32 {
             let k_big = num_bigint::BigUint::from(k);
             let first = mod_mp(&k_big, p);
             let second = mod_mp(&first, p);
@@ -204,7 +204,7 @@ fn verify_mod_mp_optimization() {
     assert_eq!(mod_mp(&mp, p), num_bigint::BigUint::zero());
     
     // Test that mod_mp gives same result as standard modulo
-    for k in 0..1000 {
+    for k in 0..1000u32 {
         let k_big = num_bigint::BigUint::from(k);
         let mod_mp_result = mod_mp(&k_big, p);
         let modulo_result = &k_big % &mp;

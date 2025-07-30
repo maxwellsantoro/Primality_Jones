@@ -1,272 +1,198 @@
 use chrono::Local;
-use primality_jones::{check_mersenne_candidate, CheckLevel};
+use primality_jones::{check_mersenne_candidate, CheckLevel, process_candidates_parallel};
 use std::fs::File;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
+use indicatif::{ProgressBar, ProgressStyle};
 
-fn read_candidates<P: AsRef<Path>>(path: P) -> io::Result<Vec<u64>> {
-    match File::open(path) {
-        Ok(file) => {
-            let reader = io::BufReader::new(file);
-            let mut candidates = Vec::new();
 
-            for line in reader.lines().map_while(Result::ok) {
-                if let Some(stripped) = line.strip_prefix('M') {
-                    if let Ok(num) = stripped.parse::<u64>() {
-                        candidates.push(num);
-                    }
-                }
-            }
-            Ok(candidates)
-        }
-        Err(_) => Ok(Vec::new()),
+
+
+
+
+
+fn main() -> io::Result<()> {
+    println!("🔍 Primality Jones - Mersenne Number Primality Tester");
+    println!("=====================================================");
+
+    // Check if candidates.txt exists
+    if !Path::new("candidates.txt").exists() {
+        println!("❌ candidates.txt not found. Creating sample file...");
+        create_sample_candidates_file()?;
+        println!("✅ Created candidates.txt with sample data");
+        println!("   Edit this file to add your own Mersenne exponents to test");
+        println!("   Each line should contain one exponent (e.g., 31, 61, 89, 107, 127)");
+        return Ok(());
     }
+
+    // Read candidates from file
+    let candidates = read_candidates_file()?;
+    if candidates.is_empty() {
+        println!("❌ No valid candidates found in candidates.txt");
+        return Ok(());
+    }
+
+    println!("📋 Found {} candidates to test", candidates.len());
+    println!("   Candidates: {:?}", candidates);
+
+    // Ask user for check level
+    let level = get_check_level()?;
+    println!("🔬 Using check level: {}", level.description());
+
+    // Process candidates
+    let start_time = Instant::now();
+    
+    if candidates.len() > 1 {
+        // Use parallel processing for multiple candidates
+        println!("🚀 Using parallel processing for {} candidates", candidates.len());
+        let results = process_candidates_parallel(candidates, level);
+        
+        // Display results
+        display_parallel_results(results, start_time);
+    } else {
+        // Single candidate processing
+        let p = candidates[0];
+        println!("🔍 Testing M{}...", p);
+        
+        let results = check_mersenne_candidate(p, level);
+        display_single_result(p, results, start_time);
+    }
+
+    Ok(())
 }
 
-fn get_user_input() -> io::Result<u64> {
-    loop {
-        print!("Enter a Mersenne exponent to test (e.g., 31 or M31 for M31 = 2^31 - 1): ");
-        io::stdout().flush()?;
+fn create_sample_candidates_file() -> io::Result<()> {
+    let mut file = File::create("candidates.txt")?;
+    writeln!(file, "# Sample Mersenne exponents to test")?;
+    writeln!(file, "# Each line should contain one exponent")?;
+    writeln!(file, "# Lines starting with # are ignored")?;
+    writeln!(file, "")?;
+    writeln!(file, "31")?;
+    writeln!(file, "61")?;
+    writeln!(file, "89")?;
+    writeln!(file, "107")?;
+    writeln!(file, "127")?;
+    writeln!(file, "")?;
+    writeln!(file, "# Add your own exponents below:")?;
+    writeln!(file, "# 521")?;
+    writeln!(file, "# 607")?;
+    writeln!(file, "# 1279")?;
+    Ok(())
+}
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+fn read_candidates_file() -> io::Result<Vec<u64>> {
+    let file = File::open("candidates.txt")?;
+    let reader = BufReader::new(file);
+    let mut candidates = Vec::new();
 
-        let input = input.trim();
-        if input.is_empty() {
-            println!("Exiting...");
-            std::process::exit(0);
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        let trimmed = line.trim();
+        
+        // Skip empty lines and comments
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
         }
-
-        // Remove 'M' prefix if present
-        let number_str = if input.starts_with('M') || input.starts_with('m') {
-            &input[1..]
-        } else {
-            input
-        };
-
-        match number_str.parse::<u64>() {
-            Ok(n) => return Ok(n),
+        
+        match trimmed.parse::<u64>() {
+            Ok(p) => {
+                if p > 0 {
+                    candidates.push(p);
+                } else {
+                    eprintln!("⚠️  Warning: Invalid exponent on line {}: {}", line_num + 1, p);
+                }
+            }
             Err(_) => {
-                println!("Please enter a valid positive number (with or without 'M' prefix).")
+                eprintln!("⚠️  Warning: Could not parse line {}: '{}'", line_num + 1, trimmed);
             }
         }
     }
+
+    Ok(candidates)
 }
 
 fn get_check_level() -> io::Result<CheckLevel> {
-    println!("\nAvailable check levels:");
-    println!("1. {}", CheckLevel::PreScreen.description());
-    println!("2. {}", CheckLevel::TrialFactoring.description());
-    println!("3. {}", CheckLevel::Probabilistic.description());
-    println!("4. {}", CheckLevel::LucasLehmer.description());
-
-    print!("\nSelect check level (1-4), or press Enter to start from level 1: ");
+    println!("\n🔬 Choose check level:");
+    println!("1. PreScreen (instant) - Check if exponent is prime");
+    println!("2. TrialFactoring (~1s) - Check for small factors");
+    println!("3. Probabilistic (seconds-minutes) - Miller-Rabin test");
+    println!("4. LucasLehmer (minutes-hours) - Definitive test");
+    print!("Enter choice (1-4) [default: 4]: ");
     io::stdout().flush()?;
 
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-
-    let input = input.trim();
-    if input.is_empty() {
-        return Ok(CheckLevel::PreScreen);
-    }
-
-    Ok(match input.parse::<u32>() {
-        Ok(1) => CheckLevel::PreScreen,
-        Ok(2) => CheckLevel::TrialFactoring,
-        Ok(3) => CheckLevel::Probabilistic,
-        Ok(4) => CheckLevel::LucasLehmer,
+    
+    match input.trim() {
+        "1" => Ok(CheckLevel::PreScreen),
+        "2" => Ok(CheckLevel::TrialFactoring),
+        "3" => Ok(CheckLevel::Probabilistic),
+        "4" | "" => Ok(CheckLevel::LucasLehmer),
         _ => {
-            println!("Invalid input, defaulting to PreScreen checks");
-            CheckLevel::PreScreen
-        }
-    })
-}
-
-fn get_user_choice() -> io::Result<String> {
-    print!("\nPress Enter to try next level, 'r' to retry this level, 'c' to change level, 'n' for new number, or 'q' to quit: ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(input.trim().to_lowercase())
-}
-
-fn calculate_timeout(p: u64, level: CheckLevel) -> Duration {
-    // Base timeouts in seconds
-    let base_timeout = match level {
-        CheckLevel::PreScreen => 1,
-        CheckLevel::TrialFactoring => 5,
-        CheckLevel::Probabilistic => 300, // 5 minutes
-        CheckLevel::LucasLehmer => 7200,  // 2 hours
-    };
-
-    // For large numbers, scale the timeout based on the size
-    if p > 1_000_000 {
-        // Calculate scaling factor based on digits
-        let digits = (p as f64 * std::f64::consts::LOG10_2) as u64;
-        let scale_factor = (digits / 1_000_000) + 1; // Scale up for each million digits
-        Duration::from_secs(base_timeout * scale_factor)
-    } else {
-        Duration::from_secs(base_timeout)
-    }
-}
-
-fn check_candidate(p: u64, level: CheckLevel) -> bool {
-    println!("\n{}", "=".repeat(60));
-    println!("Analyzing M{p} (2^{p} - 1):");
-
-    // Add warning for very large numbers
-    if p > 1_000_000 {
-        let digits = (p as f64 * std::f64::consts::LOG10_2) as u64;
-        println!("\n⚠️  Warning: This is a very large Mersenne number!");
-        println!("   - Approximate decimal digits: {digits}");
-        println!(
-            "   - Estimated memory required: ~{} GB",
-            (digits as f64 * 0.125 / 1024.0).ceil()
-        );
-        println!(
-            "   - Estimated time for Quick check: {} hours",
-            (digits as f64 * 0.0001).ceil()
-        ); // Rough estimate based on digits
-        println!("   - Higher level checks will take significantly longer");
-        print!("\nDo you want to continue? [y/N]: ");
-        io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_ok()
-            && !input.trim().eq_ignore_ascii_case("y")
-        {
-            println!("Skipping this candidate...");
-            return false;
+            println!("Invalid choice, using LucasLehmer");
+            Ok(CheckLevel::LucasLehmer)
         }
     }
+}
 
-    println!("Started at: {}", Local::now().format("%H:%M:%S"));
-    println!("Using check level: {level:?}");
-
-    let timeout = calculate_timeout(p, level);
-    println!("Timeout set to: {timeout:?}");
-
-    let check_start = Instant::now();
-    let results = check_mersenne_candidate(p, level);
-
-    // Check if we exceeded timeout
-    if check_start.elapsed() > timeout {
-        println!("\n⚠️  Check timed out after {timeout:?}");
-        println!("Consider using a lower check level for numbers this large.");
-        return false;
-    }
-
-    println!("\nResults for M{p}:");
+fn display_single_result(p: u64, results: Vec<primality_jones::CheckResult>, start_time: Instant) {
+    println!("\n📊 Results for M{}:", p);
+    println!("{}", "=".repeat(50));
+    
+    let mut all_passed = true;
     for (i, result) in results.iter().enumerate() {
-        println!(
-            "Check {}: {} (took {:?})",
-            i + 1,
-            result.message,
-            result.time_taken
-        );
+        let status = if result.passed { "✅" } else { "❌" };
+        println!("{}. {} {}", i + 1, status, result.message);
+        println!("   Time: {:?}", result.time_taken);
+        
+        if !result.passed {
+            all_passed = false;
+        }
     }
-
-    let passed = results.iter().all(|r| r.passed);
-    if passed {
-        println!("\n✓ M{p} remains a promising candidate");
+    
+    let total_time = start_time.elapsed();
+    println!("\n⏱️  Total time: {:?}", total_time);
+    
+    if all_passed {
+        println!("🎉 M{} is PRIME!", p);
     } else {
-        println!("\n✗ M{p} can be eliminated");
+        println!("💔 M{} is COMPOSITE", p);
     }
-
-    println!("Completed at: {}", Local::now().format("%H:%M:%S"));
-    passed
 }
 
-fn main() -> io::Result<()> {
-    let start_time = Instant::now();
-    let mut candidates = read_candidates("candidates.txt")?;
-
-    if candidates.is_empty() {
-        println!("No candidates.txt file found or file is empty.");
-        println!("Enter numbers interactively (press Enter with no input to exit).");
-        candidates.push(get_user_input()?);
-    } else {
-        println!("Found {} Mersenne candidates", candidates.len());
-    }
-
-    let mut current_level = get_check_level()?;
-    let mut remaining_candidates = candidates;
-
-    'main_loop: while !remaining_candidates.is_empty() {
-        let mut passed_candidates = Vec::new();
-        let mut i = 0;
-
-        while i < remaining_candidates.len() {
-            let p = remaining_candidates[i];
-            if check_candidate(p, current_level) {
-                passed_candidates.push(p);
-            }
-
-            match get_user_choice()?.as_str() {
-                "" => {
-                    // Move to next level if available
-                    match current_level {
-                        CheckLevel::PreScreen => current_level = CheckLevel::TrialFactoring,
-                        CheckLevel::TrialFactoring => current_level = CheckLevel::Probabilistic,
-                        CheckLevel::Probabilistic => current_level = CheckLevel::LucasLehmer,
-                        CheckLevel::LucasLehmer => {
-                            println!("\nNo more levels available!");
-                            break 'main_loop;
-                        }
-                    }
-                    println!("\nMoving to {current_level:?} level...");
-                    i += 1;
-                }
-                "r" => {
-                    // Retry the same candidate at the same level
-                    continue;
-                }
-                "c" => {
-                    // Change level
-                    current_level = get_check_level()?;
-                }
-                "n" => {
-                    // Test a new number
-                    if let Ok(n) = get_user_input() {
-                        remaining_candidates = vec![n];
-                        i = 0;
-                        passed_candidates.clear();
-                    }
-                }
-                "q" => break 'main_loop,
-                _ => {
-                    println!("Invalid choice, continuing with next candidate...");
-                    i += 1;
-                }
-            }
-        }
-
-        // Update remaining candidates to only those that passed
-        remaining_candidates = passed_candidates;
-
-        if remaining_candidates.is_empty() {
-            println!("\nNo candidates remain! Enter a new number or press Enter to exit.");
-            match get_user_input() {
-                Ok(n) => {
-                    remaining_candidates = vec![n];
-                    current_level = get_check_level()?;
-                }
-                Err(_) => break 'main_loop,
-            }
+fn display_parallel_results(results: Vec<(u64, Vec<primality_jones::CheckResult>)>, start_time: Instant) {
+    println!("\n📊 Parallel Processing Results:");
+    println!("{}", "=".repeat(60));
+    
+    let mut primes = Vec::new();
+    let mut composites = Vec::new();
+    
+    for (p, candidate_results) in results {
+        let all_passed = candidate_results.iter().all(|r| r.passed);
+        let total_time: std::time::Duration = candidate_results.iter()
+            .map(|r| r.time_taken)
+            .sum();
+        
+        if all_passed {
+            primes.push((p, total_time));
+            println!("🎉 M{}: PRIME (took {:?})", p, total_time);
         } else {
-            println!(
-                "\n{} candidates remain for next level:",
-                remaining_candidates.len()
-            );
-            for &p in &remaining_candidates {
-                println!("M{p}");
-            }
+            composites.push((p, total_time));
+            println!("💔 M{}: COMPOSITE (took {:?})", p, total_time);
         }
     }
-
-    let duration = start_time.elapsed();
-    println!("\nTotal runtime: {duration:?}");
-    Ok(())
+    
+    let total_time = start_time.elapsed();
+    println!("\n📈 Summary:");
+    println!("   Total time: {:?}", total_time);
+    println!("   Primes found: {} ({:?})", primes.len(), primes.iter().map(|(p, _)| format!("M{}", p)).collect::<Vec<_>>().join(", "));
+    println!("   Composites: {} ({:?})", composites.len(), composites.iter().map(|(p, _)| format!("M{}", p)).collect::<Vec<_>>().join(", "));
+    
+    if !primes.is_empty() {
+        println!("\n🏆 Mersenne Primes Found:");
+        for (p, time) in primes {
+            println!("   M{} (took {:?})", p, time);
+        }
+    }
 }

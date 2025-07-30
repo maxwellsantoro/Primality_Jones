@@ -33,9 +33,12 @@ for definitive primality testing.
 use indicatif::{ProgressBar, ProgressStyle};
 use num_bigint::{BigUint, RandBigInt};
 use num_traits::{One, Zero};
+#[cfg(feature = "pyo3")]
 use pyo3::prelude::*;
+#[cfg(feature = "pyo3")]
 use pyo3::types::PyDict;
 use rand::thread_rng;
+use rayon::prelude::*;
 use std::time::{Duration, Instant};
 
 /// Represents the result of a primality check
@@ -206,8 +209,98 @@ pub fn mod_mp(k: &BigUint, p: u64) -> BigUint {
 /// * (s^2 - 2) mod M_p
 pub fn square_and_subtract_two_mod_mp(s: &BigUint, p: u64) -> BigUint {
     let squared = s * s;
-    let minus_two = squared - BigUint::from(2u32);
-    mod_mp(&minus_two, p)
+    let mp = (BigUint::one() << p) - BigUint::one();
+    
+    // Handle the case where squared < 2 by using modular arithmetic
+    if squared < BigUint::from(2u32) {
+        // (squared - 2) mod mp = (squared + mp - 2) mod mp
+        let result = squared + &mp - BigUint::from(2u32);
+        mod_mp(&result, p)
+    } else {
+        let minus_two = squared - BigUint::from(2u32);
+        mod_mp(&minus_two, p)
+    }
+}
+
+/// Perform a Miller-Rabin primality test with parallel rounds
+///
+/// This is an optimized version that runs Miller-Rabin rounds in parallel
+/// for better performance on multi-core systems.
+///
+/// # Arguments
+///
+/// * `p` - The Mersenne exponent to test (testing 2^p - 1)
+/// * `k` - Number of rounds of testing (higher k = lower probability of false positive)
+/// * `start_time` - Start time of the test
+/// * `timeout` - Timeout for the test
+///
+/// # Returns
+///
+/// * `true` if all tests pass (number is probably prime)
+/// * `false` if any test fails (number is definitely composite)
+pub fn miller_rabin_test_parallel(p: u64, k: u32, start_time: Instant, timeout: Duration) -> bool {
+    let m = (BigUint::one() << p) - BigUint::one();
+    let m_minus_1 = &m - BigUint::one();
+
+    // Write m-1 = 2^s * d where d is odd
+    let mut s = 0;
+    let mut d = m_minus_1.clone();
+    while &d % BigUint::from(2u32) == BigUint::zero() {
+        s += 1;
+        d /= BigUint::from(2u32);
+    }
+
+    // Create progress bar for Miller-Rabin tests
+    let pb = ProgressBar::new(k as u64);
+    pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} tests ({eta})")
+        .unwrap()
+        .progress_chars("#>-"));
+
+    // Run Miller-Rabin rounds in parallel
+    let results: Vec<bool> = (0..k).into_par_iter().map(|_| {
+        // Check timeout
+        if start_time.elapsed() > timeout {
+            return false;
+        }
+
+        // Generate random base between 2 and m-1
+        let mut rng = thread_rng();
+        let a = rng.gen_biguint_range(&BigUint::from(2u32), &m);
+
+        // Compute x = a^d mod m
+        let mut x = a.modpow(&d, &m);
+
+        // If x == 1 or x == m-1, this round passes
+        if x == BigUint::one() || x == m_minus_1 {
+            return true;
+        }
+
+        // Check x^(2^r) mod m for r = 1 to s-1
+        let mut is_witness = true;
+        for _r in 1..s {
+            x = x.modpow(&BigUint::from(2u32), &m);
+
+            if x == m_minus_1 {
+                is_witness = false;
+                break;
+            }
+
+            if x == BigUint::one() {
+                // Found a non-trivial square root of 1, so m is composite
+                return false;
+            }
+        }
+
+        !is_witness
+    }).collect();
+
+    // Update progress bar
+    pb.inc(k as u64);
+    pb.finish_with_message("Completed");
+
+    // All rounds must pass
+    results.into_iter().all(|passed| passed)
 }
 
 /// Perform a Miller-Rabin primality test with specified parameters
@@ -241,75 +334,9 @@ pub fn square_and_subtract_two_mod_mp(s: &BigUint, p: u64) -> BigUint {
 /// 8. If we reach here, the number is composite
 /// 9. If all rounds pass, the number is probably prime
 pub fn miller_rabin_test(p: u64, k: u32, start_time: Instant, timeout: Duration) -> bool {
-    let m = (BigUint::one() << p) - BigUint::one();
-    let m_minus_1 = &m - BigUint::one();
-    let mut rng = thread_rng();
-
-    // Write m-1 = 2^s * d where d is odd
-    let mut s = 0;
-    let mut d = m_minus_1.clone();
-    while &d % BigUint::from(2u32) == BigUint::zero() {
-        s += 1;
-        d /= BigUint::from(2u32);
-    }
-
-    // Create progress bar for Miller-Rabin tests
-    let pb = ProgressBar::new(k as u64);
-    pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} tests ({eta})")
-        .unwrap()
-        .progress_chars("#>-"));
-
-    for _i in 0..k {
-        // Check timeout
-        if start_time.elapsed() > timeout {
-            pb.finish_with_message("Timed out");
-            return false;
-        }
-
-        // Generate random base between 2 and m-1
-        let a = rng.gen_biguint_range(&BigUint::from(2u32), &m);
-
-        // Compute x = a^d mod m
-        let mut x = a.modpow(&d, &m);
-
-        // If x == 1 or x == m-1, this round passes
-        if x == BigUint::one() || x == m_minus_1 {
-            pb.inc(1);
-            continue;
-        }
-
-        // Check x^(2^r) mod m for r = 1 to s-1
-        let mut is_witness = true;
-        for _r in 1..s {
-            x = x.modpow(&BigUint::from(2u32), &m);
-
-            if x == m_minus_1 {
-                is_witness = false;
-                break;
-            }
-
-            if x == BigUint::one() {
-                // Found a non-trivial square root of 1, so m is composite
-                pb.finish_with_message("Failed");
-                return false;
-            }
-        }
-
-        if is_witness {
-            // a is a witness for compositeness
-            pb.finish_with_message("Failed");
-            return false;
-        }
-
-        pb.inc(1);
-    }
-
-    pb.finish_with_message("Passed");
-    true
+    // Use parallel version for better performance
+    miller_rabin_test_parallel(p, k, start_time, timeout)
 }
-
-
 
 /// Check a Mersenne number candidate with the specified level of thoroughness
 ///
@@ -360,7 +387,7 @@ pub fn check_mersenne_candidate(p: u64, level: CheckLevel) -> Vec<CheckResult> {
 
     // TrialFactoring: Check for small factors
     let check_start = Instant::now();
-    if let Some(factor) = check_small_factors(p, 1_000_000) {
+    if let Some(factor) = check_small_factors_parallel(p, 1_000_000) {
         results.push(CheckResult {
             passed: false,
             message: format!("Found small factor: {factor}"),
@@ -412,32 +439,60 @@ pub fn check_mersenne_candidate(p: u64, level: CheckLevel) -> Vec<CheckResult> {
     results
 }
 
-/// Check for small factors of a Mersenne number using special properties
-pub fn check_small_factors(p: u64, limit: u64) -> Option<u64> {
+/// Check for small factors of a Mersenne number using parallel processing
+///
+/// This is an optimized version that uses parallel processing to check
+/// multiple potential factors simultaneously.
+///
+/// # Arguments
+///
+/// * `p` - The Mersenne exponent
+/// * `limit` - Maximum factor to check up to
+///
+/// # Returns
+///
+/// * `Some(factor)` if a factor is found
+/// * `None` if no factors are found
+pub fn check_small_factors_parallel(p: u64, limit: u64) -> Option<u64> {
     if !is_prime(p) {
         return None;
     }
 
-    // Any factor q of M_p must be of form q = 2kp + 1
-    // and must be ≡ ±1 (mod 8)
-    let mut k = 1;
-    while 2 * k * p < limit {
-        let q = 2 * k * p + 1;
-        if (q % 8 == 1 || q % 8 == 7) && is_prime(q) {
-            // Check if q divides 2^p - 1 using modular arithmetic
-            // We need to check if 2^p ≡ 1 (mod q)
-            let remainder = BigUint::from(2u32).modpow(&BigUint::from(p), &BigUint::from(q));
-                            if remainder == BigUint::one() {
+    // Calculate the maximum k value to check
+    let max_k = (limit - 1) / (2 * p);
+    
+    // Use parallel iterator to check factors
+    let factor = (1..=max_k).into_par_iter()
+        .map(|k| {
+            let q = 2 * k * p + 1;
+            if q > limit {
+                return None;
+            }
+            
+            // Check if q satisfies the congruence condition
+            if (q % 8 == 1 || q % 8 == 7) && is_prime(q) {
+                // Check if q divides 2^p - 1 using modular arithmetic
+                let remainder = BigUint::from(2u32).modpow(&BigUint::from(p), &BigUint::from(q));
+                if remainder == BigUint::one() {
                     // Don't count M_p itself as a factor
                     let m_p = (BigUint::one() << p) - BigUint::one();
                     if BigUint::from(q) != m_p {
                         return Some(q);
                     }
                 }
-        }
-        k += 1;
-    }
-    None
+            }
+            None
+        })
+        .find_any(|result| result.is_some())
+        .flatten();
+
+    factor
+}
+
+/// Check for small factors of a Mersenne number using special properties
+pub fn check_small_factors(p: u64, limit: u64) -> Option<u64> {
+    // Use parallel version for better performance
+    check_small_factors_parallel(p, limit)
 }
 
 /// Perform the Lucas-Lehmer test for Mersenne number primality
@@ -468,6 +523,11 @@ pub fn lucas_lehmer_test(p: u64) -> bool {
     if p < 2 {
         return false;
     }
+    
+    // Special case: M2 = 3 is prime
+    if p == 2 {
+        return true;
+    }
 
     let mut s = BigUint::from(4u32);
 
@@ -480,11 +540,43 @@ pub fn lucas_lehmer_test(p: u64) -> bool {
     s == BigUint::zero()
 }
 
+/// Process multiple Mersenne candidates in parallel
+///
+/// This function allows efficient processing of multiple candidates
+/// by utilizing all available CPU cores.
+///
+/// # Arguments
+///
+/// * `candidates` - Vector of Mersenne exponents to test
+/// * `level` - How thorough the testing should be
+///
+/// # Returns
+///
+/// Vector of (exponent, results) pairs
+///
+/// # Example
+///
+/// ```
+/// use primality_jones::{CheckLevel, process_candidates_parallel};
+///
+/// let candidates = vec![31, 61, 89, 107, 127];
+/// let results = process_candidates_parallel(candidates, CheckLevel::LucasLehmer);
+/// 
+/// for (p, candidate_results) in results {
+///     if candidate_results.iter().all(|r| r.passed) {
+///         println!("M{} is prime!", p);
+///     }
+/// }
+/// ```
+pub fn process_candidates_parallel(candidates: Vec<u64>, level: CheckLevel) -> Vec<(u64, Vec<CheckResult>)> {
+    candidates.into_par_iter()
+        .map(|p| (p, check_mersenne_candidate(p, level)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-
 
     #[test]
     fn test_is_prime() {
@@ -582,9 +674,27 @@ mod tests {
         assert!(reduced < mp, "Reduced value should be less than M_p");
         assert_eq!(mod_mp(&reduced, p), reduced, "Reduced value should be stable");
     }
+
+    #[test]
+    fn test_parallel_processing() {
+        // Test parallel processing of multiple candidates
+        let candidates = vec![31, 61, 89, 107, 127];
+        let results = process_candidates_parallel(candidates.clone(), CheckLevel::LucasLehmer);
+        
+        assert_eq!(results.len(), candidates.len());
+        
+        // Verify that known primes are correctly identified
+        for (p, candidate_results) in results {
+            if p == 31 || p == 61 || p == 89 || p == 107 || p == 127 {
+                assert!(candidate_results.iter().all(|r| r.passed), 
+                    "M{} should be identified as prime", p);
+            }
+        }
+    }
 }
 
 /// Python module for Mersenne number primality testing
+#[cfg(feature = "pyo3")]
 #[pymodule]
 fn primality_jones(_py: Python, m: &PyModule) -> PyResult<()> {
     // Expose CheckLevel enum to Python
@@ -661,12 +771,50 @@ fn primality_jones(_py: Python, m: &PyModule) -> PyResult<()> {
         lucas_lehmer_test(p)
     }
 
+    /// Process multiple candidates in parallel
+    #[pyfunction]
+    fn process_candidates_parallel_py(candidates: Vec<u64>, level: PyCheckLevel) -> PyResult<Vec<PyObject>> {
+        let check_level = match level {
+            PyCheckLevel::PreScreen => CheckLevel::PreScreen,
+            PyCheckLevel::TrialFactoring => CheckLevel::TrialFactoring,
+            PyCheckLevel::Probabilistic => CheckLevel::Probabilistic,
+            PyCheckLevel::LucasLehmer => CheckLevel::LucasLehmer,
+        };
+
+        let results = process_candidates_parallel(candidates, check_level);
+
+        Python::with_gil(|py| {
+            results
+                .into_iter()
+                .map(|(p, candidate_results)| {
+                    let dict = PyDict::new(py);
+                    dict.set_item("exponent", p)?;
+                    
+                    let results_list = candidate_results
+                        .into_iter()
+                        .map(|r| {
+                            let result_dict = PyDict::new(py);
+                            result_dict.set_item("passed", r.passed)?;
+                            result_dict.set_item("message", r.message)?;
+                            result_dict.set_item("time_taken_ns", r.time_taken.as_nanos())?;
+                            Ok(result_dict.into())
+                        })
+                        .collect::<PyResult<Vec<PyObject>>>()?;
+                    
+                    dict.set_item("results", results_list)?;
+                    Ok(dict.into())
+                })
+                .collect()
+        })
+    }
+
     // Register Python functions and classes
     m.add_class::<PyCheckLevel>()?;
     m.add_function(wrap_pyfunction!(check_mersenne, m)?)?;
     m.add_function(wrap_pyfunction!(is_prime_py, m)?)?;
     m.add_function(wrap_pyfunction!(find_small_factors, m)?)?;
     m.add_function(wrap_pyfunction!(lucas_lehmer, m)?)?;
+    m.add_function(wrap_pyfunction!(process_candidates_parallel_py, m)?)?;
 
     Ok(())
 }

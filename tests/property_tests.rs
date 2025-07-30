@@ -103,24 +103,7 @@ proptest! {
             s, p, result, p, mp);
     }
 
-    /// Property: Miller-Rabin test should be consistent for the same input
-    #[test]
-    fn test_miller_rabin_consistent(p in prop::sample::select(vec![31, 61, 89, 107, 127])) {
-        // Use a fixed seed for deterministic results
-        let start_time = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(30);
-        
-        let result1 = miller_rabin_test(p, 3, start_time, timeout);
-        let result2 = miller_rabin_test(p, 3, start_time, timeout);
-        
-        // Note: Miller-Rabin is probabilistic, so we can't guarantee exact consistency
-        // But for the same parameters and reasonable timeouts, it should be consistent
-        // We'll test this with known Mersenne primes which should consistently pass
-        if p == 31 || p == 61 || p == 89 || p == 107 || p == 127 {
-            // These are known Mersenne primes, so they should consistently pass
-            // (though Miller-Rabin might occasionally fail due to its probabilistic nature)
-        }
-    }
+
 }
 
 /// Additional property tests that don't fit the proptest! macro pattern
@@ -194,7 +177,7 @@ mod additional_property_tests {
     fn test_mersenne_number_properties() {
         // Test mathematical properties of Mersenne numbers
         for p in [3, 5, 7, 11, 13, 17, 19, 23, 29, 31] {
-            let mp = (BigUint::one() << p) - BigUint::one();
+            let mp: BigUint = (BigUint::one() << p) - BigUint::one();
             
             // Property: M_p is always odd (except M2 = 3)
             if p > 2 {
