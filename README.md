@@ -5,17 +5,15 @@ A high-performance Mersenne number primality testing library, written in Rust wi
 ## Features
 
 - Multiple levels of primality testing:
-  - **Basic**: Quick divisibility rules (instant)
-  - **FastCheck**: Small factors and Lucas sequence residues (~1 second)
-  - **Quick**: Basic Fermat tests (seconds)
-  - **Moderate**: Extended Fermat tests (~1 minute)
-  - **Thorough**: Multiple methods (~10 minutes)
-  - **Exhaustive**: All available methods (hours)
+  - **PreScreen**: Check if the exponent p itself is prime (instant)
+  - **TrialFactoring**: Check for small factors using special properties (~1 second)
+  - **Probabilistic**: Miller-Rabin test (seconds to minutes)
+  - **LucasLehmer**: The definitive test for Mersenne primes (minutes to hours)
 
 - Efficient implementations of:
   - Small factor testing using Mersenne number properties
-  - Lucas sequence residue checking
-  - Optimized modular arithmetic for Mersenne numbers
+  - Lucas-Lehmer test (the definitive test for Mersenne primes)
+  - Optimized modular arithmetic using num-bigint
   - Fermat primality testing with progress reporting
 
 - Available as both:
@@ -56,7 +54,7 @@ primality_jones = { git = "https://github.com/maxwellsantoro/primality_jones" }
 import primality_jones as pj
 
 # Basic usage
-results = pj.check_mersenne(31, pj.PyCheckLevel.FastCheck)
+results = pj.check_mersenne(31, pj.PyCheckLevel.LucasLehmer)
 for result in results:
     print(f"{'Passed' if result['passed'] else 'Failed'}: {result['message']}")
 
@@ -67,8 +65,8 @@ if pj.is_prime_py(31):
 if factor := pj.find_small_factors(11, 1_000_000):
     print(f"Found small factor: {factor}")
     
-if pj.check_lucas(127):
-    print("Passed Lucas sequence check")
+if pj.lucas_lehmer(127):
+    print("Passed Lucas-Lehmer test")
 ```
 
 ### Rust API
@@ -78,10 +76,10 @@ use primality_jones::{CheckLevel, check_mersenne_candidate};
 
 fn main() {
     let p = 31; // Test M31
-    let results = check_mersenne_candidate(p, CheckLevel::FastCheck);
+    let results = check_mersenne_candidate(p, CheckLevel::LucasLehmer);
     
     if results.iter().all(|r| r.passed) {
-        println!("M{} is a promising candidate!", p);
+        println!("M{} is prime!", p);
     } else {
         println!("M{} is not prime.", p);
     }

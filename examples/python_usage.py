@@ -20,7 +20,7 @@ def format_time(ns):
 def check_mersenne_number(p, level=None):
     """Check a Mersenne number with optional level selection."""
     if level is None:
-        level = pj.PyCheckLevel.FastCheck
+        level = pj.PyCheckLevel.TrialFactoring
     
     print(f"\nAnalyzing M{p} (2^{p} - 1):")
     print(f"Using check level: {level.description()}")
@@ -55,7 +55,7 @@ def main():
     
     # Example 3: Using different check levels
     print("\nExample 3: Testing M127 with different levels")
-    for level in [pj.PyCheckLevel.Basic, pj.PyCheckLevel.FastCheck, pj.PyCheckLevel.Quick]:
+    for level in [pj.PyCheckLevel.PreScreen, pj.PyCheckLevel.TrialFactoring, pj.PyCheckLevel.Probabilistic]:
         check_mersenne_number(127, level)
     
     # Example 4: Using individual test functions
@@ -65,7 +65,7 @@ def main():
     print(f"Is {p} prime? {pj.is_prime_py(p)}")
     if factor := pj.find_small_factors(p, 1_000_000):
         print(f"Found small factor: {factor}")
-    print(f"Lucas sequence check: {'passed' if pj.check_lucas(p) else 'failed'}")
+    print(f"Lucas-Lehmer test: {'passed' if pj.lucas_lehmer(p) else 'failed'}")
 
 if __name__ == "__main__":
     main() 
