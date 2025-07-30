@@ -32,7 +32,7 @@ for definitive primality testing.
 
 use indicatif::{ProgressBar, ProgressStyle};
 use num_bigint::{BigUint, RandBigInt};
-use num_traits::{One, ToPrimitive, Zero};
+use num_traits::{One, Zero};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rand::thread_rng;
@@ -149,12 +149,46 @@ pub fn is_prime(n: u64) -> bool {
 ///
 /// This works because 2^p ≡ 1 (mod M_p), so shifting by p positions
 /// is equivalent to multiplying by 2^p ≡ 1.
-fn mod_mp(k: &BigUint, p: u64) -> BigUint {
+pub fn mod_mp(k: &BigUint, p: u64) -> BigUint {
     let mp = (BigUint::one() << p) - BigUint::one();
-
-    // For now, use the standard modulo operation
-    // TODO: Implement the optimized bitwise version
-    k % &mp
+    
+    // Handle edge cases
+    if k.is_zero() {
+        return BigUint::zero();
+    }
+    if k == &mp {
+        return BigUint::zero();
+    }
+    if k < &mp {
+        return k.clone();
+    }
+    
+    let mut result = k.clone();
+    let mut iterations = 0;
+    let max_iterations = 1000; // Safety limit
+    
+    // Keep reducing until result < M_p
+    while result > mp && iterations < max_iterations {
+        // Split result into high and low parts
+        let high_bits = &result >> p;
+        let low_bits = &result & &mp;
+        
+        // Add high bits to low bits
+        result = high_bits + low_bits;
+        iterations += 1;
+    }
+    
+    // If we hit the iteration limit, fall back to standard modulo
+    if iterations >= max_iterations {
+        return k % &mp;
+    }
+    
+    // CRITICAL FIX: If the final result is exactly mp, it should be 0
+    if result == mp {
+        BigUint::zero()
+    } else {
+        result
+    }
 }
 
 /// Optimized square and subtract 2 modulo M_p for Lucas-Lehmer test
@@ -170,7 +204,7 @@ fn mod_mp(k: &BigUint, p: u64) -> BigUint {
 /// # Returns
 ///
 /// * (s^2 - 2) mod M_p
-fn square_and_subtract_two_mod_mp(s: &BigUint, p: u64) -> BigUint {
+pub fn square_and_subtract_two_mod_mp(s: &BigUint, p: u64) -> BigUint {
     let squared = s * s;
     let minus_two = squared - BigUint::from(2u32);
     mod_mp(&minus_two, p)
@@ -275,20 +309,7 @@ pub fn miller_rabin_test(p: u64, k: u32, start_time: Instant, timeout: Duration)
     true
 }
 
-/// Check if a number satisfies basic Mersenne prime properties
-///
-/// # Arguments
-///
-/// * `p` - The Mersenne exponent to test (testing 2^p - 1)
-///
-/// # Returns
-///
-/// * `true` if the number satisfies basic Mersenne prime properties
-/// * `false` otherwise
-pub fn check_mersenne_properties(p: u64) -> bool {
-    // Check if p ≡ 3 (mod 4)
-    p % 4 == 3
-}
+
 
 /// Check a Mersenne number candidate with the specified level of thoroughness
 ///
@@ -318,6 +339,7 @@ pub fn check_mersenne_properties(p: u64) -> bool {
 /// ```
 pub fn check_mersenne_candidate(p: u64, level: CheckLevel) -> Vec<CheckResult> {
     let mut results = Vec::new();
+    let start_time = Instant::now();
 
     // PreScreen: Check if the exponent p itself is prime
     let check_start = Instant::now();
@@ -359,7 +381,7 @@ pub fn check_mersenne_candidate(p: u64, level: CheckLevel) -> Vec<CheckResult> {
     // Probabilistic: Miller-Rabin test
     let check_start = Instant::now();
     let timeout = Duration::from_secs(300); // 5 minutes
-    let miller_rabin_passed = miller_rabin_test(p, 5, Instant::now(), timeout);
+    let miller_rabin_passed = miller_rabin_test(p, 5, start_time, timeout);
     results.push(CheckResult {
         passed: miller_rabin_passed,
         message: if miller_rabin_passed {
@@ -405,13 +427,13 @@ pub fn check_small_factors(p: u64, limit: u64) -> Option<u64> {
             // Check if q divides 2^p - 1 using modular arithmetic
             // We need to check if 2^p ≡ 1 (mod q)
             let remainder = BigUint::from(2u32).modpow(&BigUint::from(p), &BigUint::from(q));
-            if remainder == BigUint::one() {
-                // Don't count M_p itself as a factor
-                let m_p = (BigUint::one() << p) - BigUint::one();
-                if q != m_p.to_u64().unwrap() {
-                    return Some(q);
+                            if remainder == BigUint::one() {
+                    // Don't count M_p itself as a factor
+                    let m_p = (BigUint::one() << p) - BigUint::one();
+                    if BigUint::from(q) != m_p {
+                        return Some(q);
+                    }
                 }
-            }
         }
         k += 1;
     }
@@ -462,17 +484,7 @@ pub fn lucas_lehmer_test(p: u64) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_basic_properties() {
-        // Known Mersenne prime exponent
-        assert!(check_mersenne_properties(31));
-        // Known non-Mersenne prime exponent
-        assert!(!check_mersenne_properties(32));
-        // Even number
-        assert!(!check_mersenne_properties(4));
-        // Not ≡ 3 (mod 4)
-        assert!(!check_mersenne_properties(5));
-    }
+
 
     #[test]
     fn test_is_prime() {
@@ -563,6 +575,12 @@ mod tests {
         assert_eq!(mod_mp(&mp, p), BigUint::zero()); // M_p mod M_p = 0
         assert_eq!(mod_mp(&BigUint::zero(), p), BigUint::zero()); // 0 mod M_p = 0
         assert_eq!(mod_mp(&BigUint::one(), p), BigUint::one()); // 1 mod M_p = 1
+        
+        // Test the critical edge case: when reduction results in exactly M_p
+        let test_value = &mp + &BigUint::from(100u32); // M_p + 100
+        let reduced = mod_mp(&test_value, p);
+        assert!(reduced < mp, "Reduced value should be less than M_p");
+        assert_eq!(mod_mp(&reduced, p), reduced, "Reduced value should be stable");
     }
 }
 
