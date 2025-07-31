@@ -112,7 +112,8 @@ pub fn is_prime(n: u64) -> bool {
     if n % 2 == 0 || n % 3 == 0 {
         return false;
     }
-
+    
+    // Full trial division for accurate primality testing
     let sqrt_n = (n as f64).sqrt() as u64;
     let mut i = 5;
     while i <= sqrt_n {
@@ -122,6 +123,74 @@ pub fn is_prime(n: u64) -> bool {
         i += 6;
     }
     true
+}
+
+/// Fast Miller-Rabin primality test for u64 numbers
+/// This is much faster than trial division for large numbers
+fn miller_rabin_u64(n: u64, witnesses: &[u64]) -> bool {
+    if n < 2 {
+        return false;
+    }
+    if n == 2 || n == 3 {
+        return true;
+    }
+    if n % 2 == 0 {
+        return false;
+    }
+
+    // Write n-1 as d * 2^r
+    let mut d = n - 1;
+    let mut r = 0;
+    while d % 2 == 0 {
+        d /= 2;
+        r += 1;
+    }
+
+    'witness_loop: for &a in witnesses {
+        if a >= n {
+            continue;
+        }
+        
+        let mut x = mod_pow_u64(a, d, n);
+        if x == 1 || x == n - 1 {
+            continue 'witness_loop;
+        }
+        
+        for _ in 0..r - 1 {
+            x = mod_mul_u64(x, x, n);
+            if x == n - 1 {
+                continue 'witness_loop;
+            }
+        }
+        
+        return false;
+    }
+    
+    true
+}
+
+/// Fast modular exponentiation for u64
+fn mod_pow_u64(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
+    if modulus == 1 {
+        return 0;
+    }
+    let mut result = 1;
+    base %= modulus;
+    while exp > 0 {
+        if exp % 2 == 1 {
+            result = mod_mul_u64(result, base, modulus);
+        }
+        exp >>= 1;
+        base = mod_mul_u64(base, base, modulus);
+    }
+    result
+}
+
+/// Fast modular multiplication for u64 to avoid overflow
+/// Optimized for large moduli
+fn mod_mul_u64(a: u64, b: u64, modulus: u64) -> u64 {
+    // For huge moduli, use u128 arithmetic which is fast on 64-bit systems
+    ((a as u128 * b as u128) % modulus as u128) as u64
 }
 
 /// Optimized modulo operation for Mersenne numbers M_p = 2^p - 1

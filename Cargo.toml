@@ -54,3 +54,9 @@ measurement_time = "5s"
 save_baseline = true
 # Load baseline for comparison
 load_baseline = "main"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+panic = "abort"
