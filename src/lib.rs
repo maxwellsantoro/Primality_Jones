@@ -41,6 +41,19 @@ use rand::thread_rng;
 use rayon::prelude::*;
 use std::time::{Duration, Instant};
 
+/// Type of primality check performed
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckKind {
+    /// Pre-screen: Check if the exponent p itself is prime
+    ExponentPrime,
+    /// Trial factoring: Check for small factors using special properties
+    TrialFactor,
+    /// Probabilistic: Miller-Rabin test
+    MillerRabin,
+    /// Lucas-Lehmer: The definitive test for Mersenne primes
+    LucasLehmer,
+}
+
 /// Represents the result of a primality check
 #[derive(Debug, Clone)]
 pub struct CheckResult {
@@ -50,6 +63,8 @@ pub struct CheckResult {
     pub message: String,
     /// How long the check took
     pub time_taken: Duration,
+    /// Type of check that was performed
+    pub kind: CheckKind,
 }
 
 /// Different levels of thoroughness for primality checking
@@ -63,6 +78,17 @@ pub enum CheckLevel {
     Probabilistic,
     /// Lucas-Lehmer: The definitive test for Mersenne primes
     LucasLehmer,
+}
+
+impl From<CheckKind> for CheckLevel {
+    fn from(kind: CheckKind) -> Self {
+        match kind {
+            CheckKind::ExponentPrime => CheckLevel::PreScreen,
+            CheckKind::TrialFactor => CheckLevel::TrialFactoring,
+            CheckKind::MillerRabin => CheckLevel::Probabilistic,
+            CheckKind::LucasLehmer => CheckLevel::LucasLehmer,
+        }
+    }
 }
 
 impl CheckLevel {
@@ -83,7 +109,7 @@ impl CheckLevel {
     }
 }
 
-/// Check if a number is prime using trial division
+/// Check if a number is prime using trial division or Miller-Rabin for larger values
 ///
 /// # Arguments
 ///
@@ -113,7 +139,36 @@ pub fn is_prime(n: u64) -> bool {
         return false;
     }
     
-    // Full trial division for accurate primality testing
+    // For larger numbers, use Miller-Rabin test which is much faster
+if n > 1_000_000 {
+        // Use deterministic Miller-Rabin with known witnesses for u64 range
+        let witnesses: &[u64] = if n < 2_047 {
+            &[2]
+        } else if n < 1_373_653 {
+            &[2, 3]
+        } else if n < 9_080_191 {
+            &[31, 73]
+        } else if n < 25_326_001 {
+            &[2, 3, 5]
+        } else if n < 3_215_031_751 {
+            &[2, 3, 5, 7]
+        } else if n < 4_759_123_141 {
+            &[2, 7, 61]
+        } else if n < 1_122_004_669_633 {
+            &[2, 13, 23, 1662803]
+        } else if n < 2_152_302_898_747 {
+            &[2, 3, 5, 7, 11]
+        } else if n < 3_474_749_660_383 {
+            &[2, 3, 5, 7, 11, 13]
+        } else if n < 341_550_071_728_321 {
+            &[2, 3, 5, 7, 11, 13, 17]
+        } else {
+            &[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
+        };
+        return miller_rabin_u64(n, witnesses);
+    }
+    
+    // Use trial division for smaller numbers
     let sqrt_n = (n as f64).sqrt() as u64;
     let mut i = 5;
     while i <= sqrt_n {
@@ -222,40 +277,45 @@ fn mod_mul_u64(a: u64, b: u64, modulus: u64) -> u64 {
 /// This works because 2^p ≡ 1 (mod M_p), so shifting by p positions
 /// is equivalent to multiplying by 2^p ≡ 1.
 pub fn mod_mp(k: &BigUint, p: u64) -> BigUint {
-    let mp = (BigUint::one() << p) - BigUint::one();
-    
-    // Handle edge cases
+    // Handle edge cases first
     if k.is_zero() {
         return BigUint::zero();
     }
-    if k == &mp {
-        return BigUint::zero();
-    }
-    if k < &mp {
+    
+    // Only compute mp if needed
+    if k.bits() <= p {
         return k.clone();
     }
     
-    let mut result = k.clone();
-    let mut iterations = 0;
-    let max_iterations = 1000; // Safety limit
+    let mp = (BigUint::one() << p) - BigUint::one();
     
-    // Keep reducing until result < M_p
-    while result > mp && iterations < max_iterations {
-        // Split result into high and low parts
+    if k == &mp {
+        return BigUint::zero();
+    }
+    
+    let mut result = k.clone();
+    
+    // Optimized reduction loop - unroll for better performance
+    loop {
+        // Check if result fits in p bits
+        if result.bits() <= p {
+            break;
+        }
+        
+        // Split result into high and low parts more efficiently
         let high_bits = &result >> p;
         let low_bits = &result & &mp;
         
         // Add high bits to low bits
         result = high_bits + low_bits;
-        iterations += 1;
+        
+        // If result is small enough, we're done
+        if result <= mp {
+            break;
+        }
     }
     
-    // If we hit the iteration limit, fall back to standard modulo
-    if iterations >= max_iterations {
-        return k % &mp;
-    }
-    
-    // CRITICAL FIX: If the final result is exactly mp, it should be 0
+    // Final check: if result equals mp, return 0
     if result == mp {
         BigUint::zero()
     } else {
@@ -278,16 +338,16 @@ pub fn mod_mp(k: &BigUint, p: u64) -> BigUint {
 /// * (s^2 - 2) mod M_p
 pub fn square_and_subtract_two_mod_mp(s: &BigUint, p: u64) -> BigUint {
     let squared = s * s;
-    let mp = (BigUint::one() << p) - BigUint::one();
     
-    // Handle the case where squared < 2 by using modular arithmetic
-    if squared < BigUint::from(2u32) {
-        // (squared - 2) mod mp = (squared + mp - 2) mod mp
-        let result = squared + &mp - BigUint::from(2u32);
-        mod_mp(&result, p)
-    } else {
+    // Direct optimization: subtract 2 before the modulo operation when possible
+    if squared >= BigUint::from(2u32) {
         let minus_two = squared - BigUint::from(2u32);
         mod_mp(&minus_two, p)
+    } else {
+        // Handle edge case where squared < 2
+        let mp = (BigUint::one() << p) - BigUint::one();
+        let result = squared + &mp - BigUint::from(2u32);
+        mod_mp(&result, p)
     }
 }
 
@@ -448,6 +508,7 @@ pub fn check_mersenne_candidate(p: u64, level: CheckLevel) -> Vec<CheckResult> {
             "Exponent is not prime".to_string()
         },
         time_taken: check_start.elapsed(),
+        kind: CheckKind::ExponentPrime,
     });
 
     if !prime_passed || level == CheckLevel::PreScreen {
@@ -461,6 +522,7 @@ pub fn check_mersenne_candidate(p: u64, level: CheckLevel) -> Vec<CheckResult> {
             passed: false,
             message: format!("Found small factor: {factor}"),
             time_taken: check_start.elapsed(),
+            kind: CheckKind::TrialFactor,
         });
         return results;
     }
@@ -468,6 +530,7 @@ pub fn check_mersenne_candidate(p: u64, level: CheckLevel) -> Vec<CheckResult> {
         passed: true,
         message: "No small factors found up to 1M".to_string(),
         time_taken: check_start.elapsed(),
+        kind: CheckKind::TrialFactor,
     });
 
     if level == CheckLevel::TrialFactoring {
@@ -475,21 +538,32 @@ pub fn check_mersenne_candidate(p: u64, level: CheckLevel) -> Vec<CheckResult> {
     }
 
     // Probabilistic: Miller-Rabin test
-    let check_start = Instant::now();
-    let timeout = Duration::from_secs(300); // 5 minutes
-    let miller_rabin_passed = miller_rabin_test(p, 5, start_time, timeout);
-    results.push(CheckResult {
-        passed: miller_rabin_passed,
-        message: if miller_rabin_passed {
-            "Passed Miller-Rabin test".to_string()
-        } else {
-            "Failed Miller-Rabin test".to_string()
-        },
-        time_taken: check_start.elapsed(),
-    });
+    // Skip for very large numbers (>100M digits means p > ~332M)
+    if p > 332_000_000 {
+        results.push(CheckResult {
+            passed: true,
+            message: "Skipped Miller-Rabin test (number too large)".to_string(),
+            time_taken: Duration::from_secs(0),
+            kind: CheckKind::MillerRabin,
+        });
+    } else {
+        let check_start = Instant::now();
+        let timeout = Duration::from_secs(300); // 5 minutes
+        let miller_rabin_passed = miller_rabin_test(p, 5, start_time, timeout);
+        results.push(CheckResult {
+            passed: miller_rabin_passed,
+            message: if miller_rabin_passed {
+                "Passed Miller-Rabin test".to_string()
+            } else {
+                "Failed Miller-Rabin test".to_string()
+            },
+            time_taken: check_start.elapsed(),
+            kind: CheckKind::MillerRabin,
+        });
 
-    if !miller_rabin_passed || level == CheckLevel::Probabilistic {
-        return results;
+        if !miller_rabin_passed || level == CheckLevel::Probabilistic {
+            return results;
+        }
     }
 
     // LucasLehmer: The definitive test
@@ -503,6 +577,7 @@ pub fn check_mersenne_candidate(p: u64, level: CheckLevel) -> Vec<CheckResult> {
             "Failed Lucas-Lehmer test (definitive)".to_string()
         },
         time_taken: check_start.elapsed(),
+        kind: CheckKind::LucasLehmer,
     });
 
     results

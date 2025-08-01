@@ -131,14 +131,16 @@ fn bench_property_verification(c: &mut Criterion) {
     group.sample_size(50);
     
     // Benchmark property-based testing scenarios
-    group.bench_function("mod_mp_bounds_check", |b| {
+group.bench_function("mod_mp_bounds_check", |b| {
         b.iter(|| {
             for p in 3..20 {
                 let mp = (BigUint::one() << p) - BigUint::one();
                 for k in 0..100 {
                     let k_big = BigUint::from(k as u32);
                     let result = mod_mp(&k_big, p);
-                    assert!(result < mp);
+                    assert!(result <= mp);
+                    // Also verify that result is actually less than mp or is zero
+                    assert!(result < mp || result == BigUint::zero());
                 }
             }
         })
